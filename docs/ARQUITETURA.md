@@ -317,6 +317,13 @@ END (IARA não envia nada — só volta a estar ativa pra próximas mensagens do
 
 **Endpoint do webhook Chatwoot:** `/webhook/chatwoot` (separado do `/webhook/evolution`, sem conflito).
 
+> **Fluxos Chatwoot reutilizados do V19 (não reescrever):**
+> Os fluxos n8n abaixo já existem na instância Hostinger, foram depurados nos sprints do V19 e são reaproveitados integralmente pelo Greenfield:
+> - **"IARA — Handoff Chatwoot"** — acionado pela tool `handoff_humano`; cria/atualiza conversa no Chatwoot e seta `ia_ativa = FALSE`
+> - **"Chatwoot → Reativar IA"** — acionado pelo webhook `conversation_resolved`; seta `ia_ativa = TRUE` e registra nota interna no histórico
+>
+> Pendência antes de usar: auditoria das inboxes, webhooks e agent bots V19 para identificar o que serve ao Greenfield e o que é resíduo. Ver CLAUDE.md §4.
+
 ---
 
 ## 6. Variáveis de ambiente necessárias (.env n8n)
