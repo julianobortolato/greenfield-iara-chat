@@ -1,0 +1,96 @@
+{
+  "name": "IARA Chat — Fluxo Chatwoot (Reativar IA)",
+  "nodes": [
+    {
+      "id": "c01-webhook-chatwoot",
+      "name": "Nó C01 — Webhook In Chatwoot",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chatwoot",
+        "responseMode": "immediately",
+        "responseCode": "200",
+        "responseData": "allEntries",
+        "options": {}
+      }
+    },
+    {
+      "id": "c02-validar-filtrar",
+      "name": "Nó C02 — Validar e Filtrar Evento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Nó C02: Valida HMAC do Chatwoot e filtra apenas conversation_resolved\nconst crypto = require('crypto');\n\nconst body = $input.first().json;\nconst headers = body.headers || {};\n\n// --- HMAC validation (Chatwoot assina com CHATWOOT_HMAC_SECRET) ---\nconst secret = $env.CHATWOOT_HMAC_SECRET;\nconst sig = headers['x-chatwoot-signature'] || headers['X-Chatwoot-Signature'] || '';\nif (secret && sig) {\n  const payload = JSON.stringify(body.body !== undefined ? body.body : body);\n  const expected = crypto.createHmac('sha256', secret).update(payload).digest('hex');\n  if (expected !== sig) {\n    throw new Error('HMAC Chatwoot inválido — requisição rejeitada');\n  }\n}\n\n// --- Filtrar apenas conversation_resolved ---\nconst event = body?.event;\nif (event !== 'conversation_resolved') {\n  return [{ json: { action: 'stop', event } }];\n}\n\n// --- Extrair remotejid do contato (Chatwoot identifier = remotejid) ---\n// O identifier foi setado no handoff_humano como o remotejid do WhatsApp\nconst identifier =\n  body?.conversation?.meta?.sender?.identifier ||\n  body?.contact?.identifier ||\n  body?.meta?.sender?.identifier ||\n  '';\n\nif (!identifier) {\n  // Sem identifier, não conseguimos associar ao lead — para\n  return [{ json: { action: 'stop', reason: 'semIdentifier', event } }];\n}\n\nconst conversationId = body?.conversation?.id || body?.id || 0;\n\nreturn [{\n  json: {\n    action: 'reativar',\n    remotejid: identifier,\n    conversa_chatwoot_id: conversationId,\n  }\n}];"
+      }
+    },
+    {
+      "id": "c03-if-reativar",
+      "name": "Nó C03 — IF Deve Reativar",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-reativar",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "reativar",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "c04-reativar-iara",
+      "name": "Nó C04 — Reativar IARA no Supabase",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 220],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Nó C04: Seta ia_ativa=TRUE e insere msg system no histórico\n// IARA não envia nada — só volta a ficar ativa para próximas mensagens do lead\nconst remotejid = $input.first().json.remotejid;\nconst conversaId = $input.first().json.conversa_chatwoot_id;\n\nconst supabaseUrl = $env.SUPABASE_URL;\nconst supabaseKey = $env.SUPABASE_SERVICE_KEY;\nconst h = {\n  apikey: supabaseKey,\n  Authorization: `Bearer ${supabaseKey}`,\n  'Content-Type': 'application/json',\n};\n\n// UPDATE leads SET ia_ativa=TRUE\nconst updateRes = await fetch(\n  `${supabaseUrl}/rest/v1/leads?remotejid=eq.${encodeURIComponent(remotejid)}`,\n  {\n    method: 'PATCH',\n    headers: { ...h, Prefer: 'return=minimal' },\n    body: JSON.stringify({ ia_ativa: true }),\n  }\n);\nif (!updateRes.ok) {\n  const err = await updateRes.text();\n  throw new Error(`Falha ao reativar ia_ativa (${updateRes.status}): ${err}`);\n}\n\n// INSERT chat_messages role=system para marcar fim do handoff no histórico\nconst msgRes = await fetch(`${supabaseUrl}/rest/v1/chat_messages`, {\n  method: 'POST',\n  headers: h,\n  body: JSON.stringify({\n    remotejid,\n    role: 'system',\n    content: '[handoff encerrado pela equipe — IARA reativada]',\n  }),\n});\nif (!msgRes.ok) {\n  const err = await msgRes.text();\n  throw new Error(`Falha ao inserir msg system (${msgRes.status}): ${err}`);\n}\n\nreturn [{\n  json: {\n    status: 'ok',\n    remotejid,\n    conversa_chatwoot_id: conversaId,\n    mensagem: 'IARA reativada para próximas mensagens do lead',\n  }\n}];"
+      }
+    }
+  ],
+  "connections": {
+    "Nó C01 — Webhook In Chatwoot": {
+      "main": [
+        [{ "node": "Nó C02 — Validar e Filtrar Evento", "type": "main", "index": 0 }]
+      ]
+    },
+    "Nó C02 — Validar e Filtrar Evento": {
+      "main": [
+        [{ "node": "Nó C03 — IF Deve Reativar", "type": "main", "index": 0 }]
+      ]
+    },
+    "Nó C03 — IF Deve Reativar": {
+      "main": [
+        [{ "node": "Nó C04 — Reativar IARA no Supabase", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "versionId": "iara-greenfield-chatwoot-v1-0",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "greenfield"
+  },
+  "id": "iara-fluxo-chatwoot",
+  "tags": [
+    { "id": "iara", "name": "iara-greenfield" }
+  ]
+}
